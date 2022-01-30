@@ -1,0 +1,99 @@
+#!/bin/bash
+#======================================================================================
+
+# depclean configuration:
+# Set depclean for excluding packages. In default gentoo-sources excluded.
+exclude="--exclude gentoo-sources"
+
+# etc-update configuration:
+# If you want to update config files after update please set to -3.
+# If you want to keep config files same and discard all updates set to -7.
+# If you want to exit without doing anything set to -1. Default -1
+keep_config="-3"
+#======================================================================================
+
+# Execution start time
+ext_s=`date +%s`
+
+converter() {
+	h=$(bc <<< "${1}/3600")
+	m=$(bc <<< "(${1}%3600)/60")
+	s=$(bc <<< "${1}%60")
+	printf "%02d:%02d:%05.2f\n" $h $m $s
+}
+
+# Check 'eix' is installed
+if ! command -v eix > /dev/null 2>&1; then
+        echo -e "You need to install necessary package first!"
+        echo -e "emerge -a app-portage/eix"
+        exit 1
+fi
+
+# Sync packages and update db
+echo "Syncing.."
+eix-sync -q
+
+if eix --installed --upgrade | grep -q "[U]"; then
+        echo "Updating gentoo.."
+                # Get the list of upgradeable packages
+		echo "The following packages updated:" 
+                echo "------------------------------------------------------" 
+                eix --installed --upgrade | grep -w "[U]" 
+                echo "------------------------------------------------------" 
+        fi
+
+        # Check portage needs to be upgraded first
+        if eix --installed --upgrade | grep -q "sys-apps/portage"; then
+                emerge --ask=n -u1 --quiet --quiet-build sys-apps/portage
+                        echo "Portage Updated = Yes" 
+                        echo "Portage Updated = No" 
+      
+	fi
+        # Check perl will be upgraded too
+        if eix --installed --upgrade | grep -q "dev-lang/perl"; then
+                perl_cleaner=1
+                echo "Perl Updated = Yes" 
+                echo "Perl Updated = No" 
+        fi
+		
+	# Check pam will be upgraded too, it needs reboot
+	if eix --installed --upgrade | grep -q "sys-libs/pam"; then
+		echo "Pam Updated = Yes --> REBOOT REQUIRED" 
+                echo "Pam Updated = No" 
+	fi
+
+        # Start the upgrade process
+        emerge --ask=n --update --deep --changed-use --quiet --quiet-build --quiet-fail @world &&
+        eselect news read > /dev/null 2>&1 &&
+        emerge @preserved-rebuild --quiet &&
+        revdep-rebuild -q &&
+
+        # Start cleaning process
+        emerge --depclean $exclude --quiet &&
+        eclean -d distfiles > /dev/null 2>&1
+
+        # Complete perl related processes
+        if [[ -n "$perl_cleaner" ]]; then
+                emerge --ask=n -uDN --complete-graph=y --with-bdeps=y --backtrack=100 --autounmask-keep-masks=y --quiet --quiet-build --quiet-fail @world &&
+                perl-cleaner --all -q &&
+                emerge @preserved-rebuild --quiet &&
+                revdep-rebuild -q &&
+
+                # Start cleaning process
+                emerge --depclean $exclude --quiet &&
+                eclean -d distfiles > /dev/null 2>&1
+        fi
+
+        # Finish the update process, set configs & env
+        echo "$keep_config" | etc-update &&
+        updatedb &&
+        env-update > /dev/null 2>&1 &&
+        source /etc/profile &&
+        echo "Gentoo updated.."
+
+        # Execution end time
+        ext_f=`date +%s`
+
+        # Calculate execution runtime
+        runtime=$((ext_f-ext_s))
+
